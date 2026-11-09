@@ -1,12 +1,23 @@
 import os
 import socket
 import time
+import logging
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
 
-CHECK_INTERVAL = 2
-FAILURE_THRESHOLD = 3
+CHECK_INTERVAL = float(os.environ.get("CHECK_INTERVAL", "2"))
+FAILURE_THRESHOLD = int(os.environ.get("FAILURE_THRESHOLD", "3"))
+
+if CHECK_INTERVAL <= 0:
+    raise ValueError("CHECK_INTERVAL must be greater than zero")
+if FAILURE_THRESHOLD < 1:
+    raise ValueError("FAILURE_THRESHOLD must be at least one")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+        )
 
 
 def ping_redis() -> None:
@@ -36,9 +47,9 @@ def main() -> None:
             ping_redis()
 
             if outage_reported:
-                print("RECOVERED: Redis is reachable again", flush=True)
+                logging.info("RECOVERED: Redis is reachable again")
             elif first_success:
-                print("OK: Redis is reachable", flush=True)
+                logging.info("OK: Redis is reachable")
 
             failures = 0
             outage_reported = False
@@ -46,12 +57,12 @@ def main() -> None:
 
         except OSError as error:
             failures += 1
-            print(f"Check failed ({failures}): {error}", flush=True)
+            logging.warning("Check failed (%s): (%s)", failures, error)
 
             if failures >= FAILURE_THRESHOLD and not outage_reported:
-                print(
-                    f"ALERT: Redis failed {FAILURE_THRESHOLD} consecutive checks",
-                    flush=True,
+                logging.error(
+                    "ALERT: Redis failed %s consecutive checks",
+                    FAILURE_THRESHOLD,
                 )
                 outage_reported = True
 
