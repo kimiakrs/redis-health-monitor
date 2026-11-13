@@ -57,21 +57,26 @@ cleanup() {
 
 }
 
-wait_for_message(){
-    # local is used to declare variables that are only accessible within the function, preventing them from affecting the global scope.
-    # and here message is used to store the first argument passed to the function, which is expected to be a message indicating what the script is waiting for.
+# local is used to declare variables that are only accessible within the function, preventing them from affecting the global scope.
+# and here message is used to store the first argument passed to the function, which is expected to be a message indicating what the script is waiting for.
+wait_for_message() {
     local message="$1"
     local deadline=$((SECONDS + wait_seconds))
     local logs
-    # lt is used to compare the current value of SECONDS with the deadline, and the loop continues until the current time exceeds the deadline.
+
     while [ "$SECONDS" -lt "$deadline" ]; do
-        logs=$(compose logs --no-color --tail=200)
-        # -q is used to suppress the output of grep, so it only returns the exit status indicating whether the pattern was found or not.
-        if echo "$logs" | grep -q "$message"; then
+        logs="$(compose logs --no-color monitor)"
+        # -Fq is used to search for a fixed string (the message) in the logs, and <<< is used to pass the logs as input to grep. If the message is found, the function prints a verification message and returns 0, indicating success.
+        if grep -Fq "$message" <<< "$logs"; then
+            echo "Verified: $message"
             return 0
         fi
+
         sleep 1
     done
+
+    echo "Timed out waiting for: $message"
+    return 1
 }
 
 # ==================================================
@@ -108,14 +113,16 @@ compose start redis
 echo "Waiting for the recovery message..."
 wait_for_message "RECOVERED:"
 
+
+echo "Checking recovery details..."
+
+recovery_logs="$(compose logs --no-color monitor)"
+
+if ! grep -Eq 'RECOVERED:.*observed_outage_seconds=[0-9]+\.[0-9]+; failed_checks=[1-9][0-9]*' <<< "$recovery_logs"; then
+    echo "Recovery message is missing outage duration or failed-check count."
+    exit 1
+fi
+
 echo "PASS: Startup, outage, and recovery test completed successfully."
-
-
-
-
-
-
-
-
 
 
