@@ -123,6 +123,10 @@ if ! grep -Eq 'RECOVERED:.*observed_outage_seconds=[0-9]+\.[0-9]+; failed_checks
     exit 1
 fi
 
+
+echo "Monitoring Logs"
+compose logs --no-color monitor
+
 echo "PASS: Startup, outage, and recovery test completed successfully."
 
 

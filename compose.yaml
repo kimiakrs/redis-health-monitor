@@ -15,7 +15,24 @@ services:
     environment:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      WEBHOOK_URL: "${WEBHOOK_URL:-}"
     depends_on:
       redis:
         condition: service_healthy
     command: ["python", "-u", "app.py"]
+  receiver:
+    image: python:3.12-alpine
+    profiles: ["notifications"]
+    working_dir: /app
+    volumes:
+      - ./receiver.py:/app/receiver.py:ro
+    command: ["python", "-u", "receiver.py"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=1).close()"
+      interval: 2s
+      timeout: 2s
+      retries: 15
