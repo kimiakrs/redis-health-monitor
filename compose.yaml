@@ -12,10 +12,13 @@ services:
     working_dir: /app
     volumes:
       - ./app.py:/app/app.py:ro
+      - ./status_api.py:/app/status_api.py:ro
     environment:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       WEBHOOK_URL: "${WEBHOOK_URL:-}"
+      API_PORT: "8081"
+      STATUS_STALE_AFTER: "30"
     depends_on:
       redis:
         condition: service_healthy
