@@ -4,13 +4,15 @@ import socket
 import time
 import logging
 import json
+import signal
+from threading import Thread
+from status_api import MonitoringState, create_status_server
 # http.client is used to make HTTP requests to the Redis server for health checks.
 from http.client import HTTPConnection, HTTPException
 # urllib.error is used to handle errors that may occur during HTTP requests to the Redis server for health checks.
 from urllib.error import URLError, HTTPError
 # .request is used to make HTTP requests to the Redis server for health checks.
 from urllib.request import Request, urlopen
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,11 +21,18 @@ logging.basicConfig(
 
 REDIS_HOST = os.environ.get("REDIS_HOST", "redis")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
+API_PORT = int(os.environ.get("API_PORT", "8081"))
+STATUS_STALE_AFTER = float(os.environ.get("STATUS_STALE_AFTER", "30"))
 
 CHECK_INTERVAL = 2
 FAILURE_THRESHOLD = 3
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").strip()
 WEBHOOK_TIMEOUT = 3 #Seconds
+monitoring_state = MonitoringState(
+    REDIS_HOST,
+    REDIS_PORT,
+    stale_after=STATUS_STALE_AFTER,
+)
 
 
 
@@ -89,7 +98,7 @@ def send_notification(payload: dict) -> None:
         )
 
 
-def main() -> None:
+def monitor_loop() -> None:
     failures = 0
     outage_reported = False
     first_success = True
@@ -106,6 +115,12 @@ def main() -> None:
     while True:
         try:
             ping_redis()
+            monitoring_state.record_check(
+                    success=True,
+                    failures=0,
+                    alert_active=False,
+                    outage_started_at=None,
+                    )
 
             if outage_started_at is not None:
                 # monotonic() is used to measure elapsed time, so we can calculate the outage duration even if the system clock changes.
@@ -148,6 +163,12 @@ def main() -> None:
                 outage_started_at = time.monotonic()
 
             failures += 1
+            monitoring_state.record_check(
+                    success=False,
+                    failures=failures,
+                    alert_active=failures >= FAILURE_THRESHOLD,
+                    outage_started_at=outage_started_at,
+                    )
 
             logging.warning(
                 "Check failed (%s); error_type=%s; error=%s",
@@ -176,6 +197,38 @@ def main() -> None:
                 })
 
         time.sleep(CHECK_INTERVAL)
+
+
+def handle_termination(signum, frame) -> None:
+    """Exit through the cleanup block when Docker requests shutdown."""
+    raise SystemExit(0)
+
+
+def main() -> None:
+    # Binding happens here, so a port conflict fails before monitoring starts.
+    server = create_status_server(monitoring_state, port=API_PORT)
+    # ThreadingHTTPServer.serve_forever() is used to run the HTTP server in a separate thread, allowing the monitoring loop to continue running concurrently. 
+    # The server thread is set as a daemon so that it will automatically exit when the main program exits.
+    server_thread = Thread(
+        target=server.serve_forever,
+        name="status-api",
+        daemon=True,
+    )
+    # Signal handling is set up to catch the SIGTERM signal, which is sent by Docker when the container is being stopped. The handle_termination function raises a SystemExit exception, which allows the program to exit gracefully and perform any necessary cleanup.
+    signal.signal(signal.SIGTERM, handle_termination)
+
+    try:
+        server_thread.start()
+        logging.info("Status API listening on port %s", API_PORT)
+        monitor_loop()
+    except KeyboardInterrupt:
+        logging.info("Stopping Redis monitor")
+    finally:
+        if server_thread.is_alive():
+            server.shutdown()
+            server_thread.join()
+
+        server.server_close()
 
 if __name__ == "__main__":
     main()
